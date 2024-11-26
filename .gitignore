@@ -1,0 +1,22 @@
+# Ignore Python byte code
+__pycache__/
+
+# Ignore poetry files
+/.venv/
+
+# Ignore Docker artifacts
+.dockerignore
+.docker/
+
+# Ignore local development environment variables
+.env
+
+# Ignore system or editor files
+.DS_Store
+*.swp
+*.log
+*.vscode/
+
+# Ignore IDE-specific files
+.idea/
+/.env-non-dev
