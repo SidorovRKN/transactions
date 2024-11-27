@@ -1,39 +1,84 @@
+from django.core.exceptions import ValidationError
+from drf_yasg import openapi
+from drf_yasg.utils import swagger_auto_schema
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.decorators import action
-from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework.filters import OrderingFilter
-from rest_framework import permissions
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.pagination import PageNumberPagination
+from django.shortcuts import get_object_or_404
 from .models import Wallet, Transaction
 from .serializers import WalletSerializer, TransactionSerializer
-from rest_framework.pagination import PageNumberPagination
 
 
-# Пагинация для списков
+# Унифицированная пагинация
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = 'page_size'
     max_page_size = 100
 
 
+# Wallet List View
 class WalletListView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    # permission_classes = [IsAuthenticated]
     pagination_class = StandardResultsSetPagination
 
+    @swagger_auto_schema(
+        operation_summary="Retrieve a list of wallets",
+        operation_description="Returns a paginated list of wallets with optional filtering by label.",
+        manual_parameters=[
+            openapi.Parameter(
+                'page',
+                openapi.IN_QUERY,
+                description='Page number',
+                type=openapi.TYPE_INTEGER
+            ),
+            openapi.Parameter(
+                'page_size',
+                openapi.IN_QUERY,
+                description='Number of items per page',
+                type=openapi.TYPE_INTEGER
+            ),
+            openapi.Parameter(
+                'label',
+                openapi.IN_QUERY,
+                description='Filter by wallet label',
+                type=openapi.TYPE_STRING
+            ),
+            openapi.Parameter(
+                "sort",
+                openapi.IN_QUERY,
+                description="Sort by balance (asc/desc)",
+                type=openapi.TYPE_STRING,
+                enum=["asc", "desc"],
+            ),
+        ],
+        responses={200: WalletSerializer(many=True)},
+    )
     def get(self, request):
-        # Фильтрация и сортировка
         wallets = Wallet.objects.all()
         label = request.query_params.get('label', None)
+        sort = request.query_params.get('sort', "asc")
+
         if label:
             wallets = wallets.filter(label__icontains=label)
 
-        # Пагинация
+        if sort == "asc":
+            wallets = wallets.order_by("balance")
+        elif sort == "desc":
+            wallets = wallets.order_by("-balance")
+
         paginator = self.pagination_class()
-        page = paginator.paginate_queryset(wallets, request)
+        page = paginator.paginate_queryset(wallets, request, view=self)
+
         serializer = WalletSerializer(page, many=True)
         return paginator.get_paginated_response(serializer.data)
 
+    @swagger_auto_schema(
+        operation_summary="Create a new wallet",
+        request_body=WalletSerializer,
+        responses={201: WalletSerializer, 400: "Validation Error"},
+    )
     def post(self, request):
         serializer = WalletSerializer(data=request.data)
         if serializer.is_valid():
@@ -42,73 +87,125 @@ class WalletListView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+# Wallet Detail View
 class WalletDetailView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    # permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_summary="Retrieve wallet details",
+        responses={200: WalletSerializer, 404: "Not Found"},
+    )
     def get(self, request, pk):
-        try:
-            wallet = Wallet.objects.get(pk=pk)
-        except Wallet.DoesNotExist:
-            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
-
+        wallet = get_object_or_404(Wallet, pk=pk)
         serializer = WalletSerializer(wallet)
         return Response(serializer.data)
 
+    @swagger_auto_schema(
+        operation_summary="Delete a wallet",
+        responses={204: "No Content", 404: "Not Found"},
+    )
     def delete(self, request, pk):
-        try:
-            wallet = Wallet.objects.get(pk=pk)
-        except Wallet.DoesNotExist:
-            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
-
+        wallet = get_object_or_404(Wallet, pk=pk)
         wallet.delete()
         return Response({'detail': 'Deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
 
 
+# Transaction List View
 class TransactionListView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    # permission_classes = [IsAuthenticated]
     pagination_class = StandardResultsSetPagination
 
+    @swagger_auto_schema(
+        manual_parameters=[
+            openapi.Parameter(
+                "wallet",
+                openapi.IN_QUERY,
+                description="Filter by wallet ID",
+                type=openapi.TYPE_INTEGER,
+            ),
+            openapi.Parameter(
+                "txid",
+                openapi.IN_QUERY,
+                description="Filter by txid(partial match)",
+                type=openapi.TYPE_STRING,
+            ),
+            openapi.Parameter(
+                'page',
+                openapi.IN_QUERY,
+                description='Page number',
+                type=openapi.TYPE_INTEGER
+            ),
+            openapi.Parameter(
+                'page_size',
+                openapi.IN_QUERY,
+                description='Number of items per page',
+                type=openapi.TYPE_INTEGER
+            ),
+            openapi.Parameter(
+                "sort",
+                openapi.IN_QUERY,
+                description="Sort by amount (asc/desc)",
+                type=openapi.TYPE_STRING,
+                enum=["asc", "desc"],
+            ),
+        ],
+        responses={200: TransactionSerializer(many=True)},
+    )
     def get(self, request):
-        # Фильтрация и сортировка
         transactions = Transaction.objects.all()
         wallet_id = request.query_params.get('wallet', None)
         txid = request.query_params.get('txid', None)
+        sort = request.query_params.get('sort', "asc")
+
         if wallet_id:
             transactions = transactions.filter(wallet__id=wallet_id)
         if txid:
             transactions = transactions.filter(txid__icontains=txid)
 
-        # Пагинация
+        if sort == "asc":
+            transactions = transactions.order_by("amount")
+        elif sort == "desc":
+            transactions = transactions.order_by("-amount")
+
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(transactions, request)
         serializer = TransactionSerializer(page, many=True)
         return paginator.get_paginated_response(serializer.data)
 
+    @swagger_auto_schema(
+        operation_summary="Create a new transaction",
+        request_body=TransactionSerializer,
+        responses={201: TransactionSerializer, 400: "Validation Error"},
+    )
     def post(self, request):
         serializer = TransactionSerializer(data=request.data)
         if serializer.is_valid():
-            transaction = serializer.save()
+            try:
+                transaction = serializer.save()
+            except ValidationError as e:
+                return Response(data={"Error": e}, status=400)
             return Response(TransactionSerializer(transaction).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+# Transaction Detail View
 class TransactionDetailView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    # permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_summary="Retrieve transaction details",
+        responses={200: TransactionSerializer, 404: "Not Found"},
+    )
     def get(self, request, pk):
-        try:
-            transaction = Transaction.objects.get(pk=pk)
-        except Transaction.DoesNotExist:
-            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
-
+        transaction = get_object_or_404(Transaction, pk=pk)
         serializer = TransactionSerializer(transaction)
         return Response(serializer.data)
 
+    @swagger_auto_schema(
+        operation_summary="Delete a transaction",
+        responses={204: "No Content", 404: "Not Found"},
+    )
     def delete(self, request, pk):
-        try:
-            transaction = Transaction.objects.get(pk=pk)
-        except Transaction.DoesNotExist:
-            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
-
+        transaction = get_object_or_404(Transaction, pk=pk)
         transaction.delete()
         return Response({'detail': 'Deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
